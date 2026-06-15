@@ -43,6 +43,8 @@ WSU = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utilit
 TDS = "http://www.onvif.org/ver10/device/wsdl"
 TEV = "http://www.onvif.org/ver10/events/wsdl"
 TT = "http://www.onvif.org/ver10/schema"
+TOPICS = "http://www.onvif.org/ver10/topics"
+AXIS_TOPICS = "http://www.axis.com/2009/event/topics"
 
 DEFAULT_EXCLUDE_TOPICS = {
     "tnsaxis:AdaptiveAudioDetection/LevelData",
@@ -189,6 +191,7 @@ class OnvifEventClient:
         self.soap = OnvifSoapClient(ip, username, password)
         self.device_url = self.soap.build_url(DEVICE_SERVICE_PATH)
         self.events_url = None
+        self.subscription_url = None
         self.subscription_reference_headers = ""
         self.unsubscribe_attempted = False
         self.stop_flag = threading.Event()
@@ -312,6 +315,20 @@ class OnvifEventClient:
             extra_header_xml=self.subscription_reference_headers,
         )
 
+    def set_synchronization_point(self):
+        body = """
+        <tev:SetSynchronizationPoint/>
+        """
+
+        action = "http://www.onvif.org/ver10/events/wsdl/PullPointSubscription/SetSynchronizationPointRequest"
+
+        return self.soap.post(
+            self.subscription_url,
+            action,
+            body,
+            extra_header_xml=self.subscription_reference_headers,
+        )
+
     def unsubscribe(self):
         if not self.subscription_url:
             return
@@ -358,11 +375,33 @@ class OnvifEventClient:
 
             try:
                 props = self.get_event_properties()
+                declared_topics = extract_declared_topics(props)
+
                 event_queue.put({
                     "kind": "system",
-                    "text": "Fetched event properties.",
+                    "text": f"Fetched event properties ({len(declared_topics)} declared topics).",
                     "raw": props,
                 })
+
+                if declared_topics:
+                    axis_topics = [topic for topic in declared_topics if "tnsaxis:" in topic]
+                    analytics_topics = [
+                        topic for topic in declared_topics
+                        if "CameraApplicationPlatform" in topic or "Analytics" in topic
+                    ]
+
+                    summary = (
+                        f"Declared event topics: {len(declared_topics)} total, "
+                        f"{len(axis_topics)} Axis-specific."
+                    )
+                    if analytics_topics:
+                        summary += f" Found {len(analytics_topics)} application/analytics-related topics."
+
+                    event_queue.put({
+                        "kind": "system",
+                        "text": summary,
+                        "raw": "\n".join(declared_topics),
+                    })
             except Exception as exc:
                 event_queue.put({
                     "kind": "warning",
@@ -371,6 +410,20 @@ class OnvifEventClient:
                 })
 
             self.create_pullpoint_subscription()
+
+            try:
+                self.set_synchronization_point()
+                event_queue.put({
+                    "kind": "system",
+                    "text": "Requested synchronization point for stateful events.",
+                    "raw": "",
+                })
+            except Exception as exc:
+                event_queue.put({
+                    "kind": "warning",
+                    "text": f"SetSynchronizationPoint failed, continuing anyway: {exc}",
+                    "raw": "",
+                })
 
             while not self.stop_flag.is_set():
                 try:
@@ -429,6 +482,49 @@ def format_xml_for_display(text):
         return "\n".join(line for line in pretty.splitlines() if line.strip())
     except Exception:
         return text
+
+
+def prefixed_qname(name):
+    if not name.startswith("{"):
+        return name
+
+    namespace, local = name[1:].split("}", 1)
+    prefixes = {
+        TOPICS: "tns1",
+        AXIS_TOPICS: "tnsaxis",
+        TT: "tt",
+        TEV: "tev",
+    }
+    prefix = prefixes.get(namespace)
+    return f"{prefix}:{local}" if prefix else local
+
+
+def extract_declared_topics(xml):
+    try:
+        root = ET.fromstring(xml)
+    except ET.ParseError:
+        return []
+
+    topic_set = None
+    for elem in root.iter():
+        if local_name(elem.tag) == "TopicSet":
+            topic_set = elem
+            break
+
+    if topic_set is None:
+        return []
+
+    topics = []
+
+    def walk(node, path):
+        for child in list(node):
+            child_path = path + [prefixed_qname(child.tag)]
+            if any(local_name(attr) == "topic" and str(value).lower() == "true" for attr, value in child.attrib.items()):
+                topics.append("/".join(child_path))
+            walk(child, child_path)
+
+    walk(topic_set, [])
+    return topics
 
 
 def parse_notification_messages(xml):
