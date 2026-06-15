@@ -468,6 +468,9 @@ def parse_notification_messages(xml):
         for child in node.iter():
             lname = local_name(child.tag)
 
+            if not event_time and child.attrib.get("UtcTime"):
+                event_time = child.attrib["UtcTime"]
+
             if lname == "Topic":
                 topic = elem_text(child)
 
