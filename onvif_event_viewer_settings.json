@@ -6,5 +6,6 @@
   "regex": false,
   "case_sensitive": false,
   "autoscroll": true,
-  "hide_audio_metrics": true
+  "hide_audio_metrics": true,
+  "theme": "dark"
 }

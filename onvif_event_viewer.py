@@ -64,6 +64,48 @@ ABOUT_TEXT = (
     "https://ConsultingJoe.com"
 )
 EVENTS_FILE_NAME = "onvif_event_viewer_events.json"
+LIGHT_THEME = {
+    "bg": "#F3F4F6",
+    "bg_alt": "#E5E7EB",
+    "fg": "#111827",
+    "muted": "#6B7280",
+    "field_bg": "#FFFFFF",
+    "button_bg": "#E5E7EB",
+    "button_active": "#D1D5DB",
+    "border": "#CBD5E1",
+    "selection_bg": "#0F4C81",
+    "selection_fg": "#FFFFFF",
+    "xml_bracket": "#6B7280",
+    "xml_tag": "#0F4C81",
+    "xml_attr": "#9A3412",
+    "xml_string": "#166534",
+    "xml_comment": "#6B7280",
+    "xml_text": "#111827",
+    "xml_decl": "#0F766E",
+}
+DARK_THEME = {
+    "bg": "#111827",
+    "bg_alt": "#1F2937",
+    "fg": "#F9FAFB",
+    "muted": "#9CA3AF",
+    "field_bg": "#0F172A",
+    "button_bg": "#334155",
+    "button_active": "#475569",
+    "border": "#475569",
+    "selection_bg": "#2563EB",
+    "selection_fg": "#F9FAFB",
+    "xml_bracket": "#94A3B8",
+    "xml_tag": "#7DD3FC",
+    "xml_attr": "#FDBA74",
+    "xml_string": "#86EFAC",
+    "xml_comment": "#9CA3AF",
+    "xml_text": "#F9FAFB",
+    "xml_decl": "#67E8F9",
+}
+THEMES = {
+    "light": LIGHT_THEME,
+    "dark": DARK_THEME,
+}
 
 XML_TOKEN_RE = re.compile(r"<!--.*?-->|<!\[CDATA\[.*?\]\]>|<\?.*?\?>|</?[^>]+?>", re.DOTALL)
 XML_ATTR_RE = re.compile(r'([^\s=/?<>]+)(\s*=\s*)(".*?"|\'.*?\'|[^\s>]+)', re.DOTALL)
@@ -635,6 +677,7 @@ class EventViewerGui:
         self.client = None
         self.worker = None
         self.settings_path = default_settings_path()
+        self.current_palette = LIGHT_THEME
 
         self.ip_var = tk.StringVar(value=CAMERA_IP)
         self.user_var = tk.StringVar(value=ONVIF_USER)
@@ -645,15 +688,19 @@ class EventViewerGui:
         self.autoscroll_var = tk.BooleanVar(value=True)
         self.exclude_noise_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Disconnected")
+        self.theme_var = tk.StringVar(value="light")
         self.xml_preview_visible = True
 
         self.load_settings(self.settings_path)
         self.build_gui()
+        self.apply_theme()
         self.enable_auto_settings_save()
         self.root.after(200, self.process_queue)
 
     def build_gui(self):
         self.build_menu()
+        self.style = ttk.Style(self.root)
+        self.style.theme_use("clam")
 
         top = ttk.Frame(self.root, padding=8)
         top.pack(side=tk.TOP, fill=tk.X)
@@ -744,26 +791,29 @@ class EventViewerGui:
         detail_container.rowconfigure(0, weight=1)
 
     def build_menu(self):
-        menu_bar = tk.Menu(self.root)
+        self.menu_bar = tk.Menu(self.root)
 
-        file_menu = tk.Menu(menu_bar, tearoff=0)
-        file_menu.add_command(label="Import All Events...", command=self.import_all_events)
-        file_menu.add_command(label="Export All Events...", command=self.export_all_events)
-        file_menu.add_command(label="Export Selected Event XML...", command=self.export_selected_event_xml)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exit", command=self.on_close)
-        menu_bar.add_cascade(label="File", menu=file_menu)
+        self.file_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.file_menu.add_command(label="Import All Events...", command=self.import_all_events)
+        self.file_menu.add_command(label="Export All Events...", command=self.export_all_events)
+        self.file_menu.add_command(label="Export Selected Event XML...", command=self.export_selected_event_xml)
+        self.file_menu.add_separator()
+        self.file_menu.add_command(label="Exit", command=self.on_close)
+        self.menu_bar.add_cascade(label="File", menu=self.file_menu)
 
-        self.view_menu = tk.Menu(menu_bar, tearoff=0)
+        self.view_menu = tk.Menu(self.menu_bar, tearoff=0)
         self.view_menu.add_command(label="Hide XML Preview", command=self.toggle_xml_preview)
-        menu_bar.add_cascade(label="View", menu=self.view_menu)
+        self.view_menu.add_separator()
+        self.view_menu.add_radiobutton(label="Light Mode", variable=self.theme_var, value="light", command=self.apply_theme)
+        self.view_menu.add_radiobutton(label="Dark Mode", variable=self.theme_var, value="dark", command=self.apply_theme)
+        self.menu_bar.add_cascade(label="View", menu=self.view_menu)
 
-        help_menu = tk.Menu(menu_bar, tearoff=0)
-        help_menu.add_command(label="Web Help", command=self.open_web_help)
-        help_menu.add_command(label="About", command=self.show_about)
-        menu_bar.add_cascade(label="Help", menu=help_menu)
+        self.help_menu = tk.Menu(self.menu_bar, tearoff=0)
+        self.help_menu.add_command(label="Web Help", command=self.open_web_help)
+        self.help_menu.add_command(label="About", command=self.show_about)
+        self.menu_bar.add_cascade(label="Help", menu=self.help_menu)
 
-        self.root.configure(menu=menu_bar)
+        self.root.configure(menu=self.menu_bar)
 
     def connect(self):
         if self.worker and self.worker.is_alive():
@@ -818,6 +868,7 @@ class EventViewerGui:
             "case_sensitive": bool(self.case_var.get()),
             "autoscroll": bool(self.autoscroll_var.get()),
             "hide_audio_metrics": bool(self.exclude_noise_var.get()),
+            "theme": self.theme_var.get(),
         }
 
     def enable_auto_settings_save(self):
@@ -830,6 +881,7 @@ class EventViewerGui:
             self.case_var,
             self.autoscroll_var,
             self.exclude_noise_var,
+            self.theme_var,
         ):
             variable.trace_add("write", self.on_settings_changed)
 
@@ -848,6 +900,7 @@ class EventViewerGui:
         self.case_var.set(bool(payload.get("case_sensitive", self.case_var.get())))
         self.autoscroll_var.set(bool(payload.get("autoscroll", self.autoscroll_var.get())))
         self.exclude_noise_var.set(bool(payload.get("hide_audio_metrics", self.exclude_noise_var.get())))
+        self.theme_var.set(str(payload.get("theme", self.theme_var.get())))
 
     def load_settings(self, path, show_errors=False):
         try:
@@ -983,6 +1036,76 @@ class EventViewerGui:
         label = "Hide XML Preview" if self.xml_preview_visible else "Show XML Preview"
         self.view_menu.entryconfigure(0, label=label)
 
+    def apply_theme(self):
+        theme_name = self.theme_var.get().lower()
+        if theme_name not in THEMES:
+            theme_name = "light"
+            self.theme_var.set(theme_name)
+
+        palette = THEMES[theme_name]
+        self.current_palette = palette
+
+        self.root.configure(bg=palette["bg"])
+
+        self.style.configure(".", background=palette["bg"], foreground=palette["fg"])
+        self.style.configure("TFrame", background=palette["bg"])
+        self.style.configure("TLabel", background=palette["bg"], foreground=palette["fg"])
+        self.style.configure(
+            "TButton",
+            background=palette["button_bg"],
+            foreground=palette["fg"],
+            bordercolor=palette["border"],
+            focusthickness=1,
+            focuscolor=palette["selection_bg"],
+        )
+        self.style.map(
+            "TButton",
+            background=[("active", palette["button_active"]), ("disabled", palette["bg_alt"])],
+            foreground=[("disabled", palette["muted"])],
+        )
+        self.style.configure("TCheckbutton", background=palette["bg"], foreground=palette["fg"])
+        self.style.map(
+            "TCheckbutton",
+            background=[("active", palette["bg"])],
+            foreground=[("disabled", palette["muted"])],
+        )
+        self.style.configure(
+            "TEntry",
+            fieldbackground=palette["field_bg"],
+            foreground=palette["fg"],
+            bordercolor=palette["border"],
+        )
+        self.style.configure("TPanedwindow", background=palette["bg"])
+        self.style.configure("Treeview", background=palette["field_bg"], fieldbackground=palette["field_bg"], foreground=palette["fg"], bordercolor=palette["border"])
+        self.style.map(
+            "Treeview",
+            background=[("selected", palette["selection_bg"])],
+            foreground=[("selected", palette["selection_fg"])],
+        )
+        self.style.configure("Treeview.Heading", background=palette["bg_alt"], foreground=palette["fg"], bordercolor=palette["border"])
+        self.style.map("Treeview.Heading", background=[("active", palette["button_active"])])
+
+        self.detail.configure(
+            background=palette["field_bg"],
+            foreground=palette["fg"],
+            insertbackground=palette["fg"],
+            selectbackground=palette["selection_bg"],
+            selectforeground=palette["selection_fg"],
+        )
+        self.configure_detail_tags()
+        self.apply_menu_theme()
+
+    def apply_menu_theme(self):
+        palette = self.current_palette
+        for menu in (self.menu_bar, self.file_menu, self.view_menu, self.help_menu):
+            menu.configure(
+                background=palette["bg_alt"],
+                foreground=palette["fg"],
+                activebackground=palette["selection_bg"],
+                activeforeground=palette["selection_fg"],
+                borderwidth=1,
+            )
+
     def on_close(self):
         self.save_settings(self.settings_path)
         if self.client:
@@ -993,16 +1116,17 @@ class EventViewerGui:
         base_font = tkfont.nametofont("TkFixedFont")
         bold_font = base_font.copy()
         bold_font.configure(weight="bold")
+        palette = self.current_palette
 
         self.detail.configure(font=base_font)
         self.detail.tag_configure("detail_label", font=bold_font)
-        self.detail.tag_configure("xml_bracket", foreground="#6B7280")
-        self.detail.tag_configure("xml_tag", foreground="#0F4C81")
-        self.detail.tag_configure("xml_attr", foreground="#9A3412")
-        self.detail.tag_configure("xml_string", foreground="#166534")
-        self.detail.tag_configure("xml_comment", foreground="#6B7280")
-        self.detail.tag_configure("xml_text", foreground="#111827")
-        self.detail.tag_configure("xml_decl", foreground="#0F766E")
+        self.detail.tag_configure("xml_bracket", foreground=palette["xml_bracket"])
+        self.detail.tag_configure("xml_tag", foreground=palette["xml_tag"])
+        self.detail.tag_configure("xml_attr", foreground=palette["xml_attr"])
+        self.detail.tag_configure("xml_string", foreground=palette["xml_string"])
+        self.detail.tag_configure("xml_comment", foreground=palette["xml_comment"])
+        self.detail.tag_configure("xml_text", foreground=palette["xml_text"])
+        self.detail.tag_configure("xml_decl", foreground=palette["xml_decl"])
         self.detail.configure(state=tk.DISABLED)
 
     def log(self, text):

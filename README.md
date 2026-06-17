@@ -16,6 +16,7 @@ The app:
 - Displays incoming events in a filterable table
 - Shows raw event XML in a readable detail panel with XML syntax coloring
 - Remembers the last-used connection settings between launches
+- Supports light and dark viewing modes
 - Includes menu actions for importing/exporting all events and exporting a selected event's XML
 
 ## Requirements
@@ -72,6 +73,8 @@ python .\onvif_event_viewer.py
 
 - `Hide XML Preview` collapses the bottom raw XML/details pane
 - `Show XML Preview` restores the bottom raw XML/details pane
+- `Light Mode` switches the viewer to the light theme
+- `Dark Mode` switches the viewer to the dark theme
 
 ### Help
 
