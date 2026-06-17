@@ -4,6 +4,10 @@
 
 Download the pre-built Windows EXE from the [Release page](https://github.com/jsammarco/ONVIF-Event-Viewer/releases/tag/Release).
 
+<a href="https://github.com/jsammarco/ONVIF-Event-Viewer/blob/main/Screenshot_Dark.jpg" target="_blank" rel="noopener noreferrer">
+  <img src="https://github.com/jsammarco/ONVIF-Event-Viewer/blob/main/Screenshot_Dark.jpg?raw=true" alt="ONVIF Event Viewer dark mode screenshot" width="900">
+</a>
+
 <a href="https://github.com/jsammarco/ONVIF-Event-Viewer/blob/main/Screenshot.jpg" target="_blank" rel="noopener noreferrer">
   <img src="https://github.com/jsammarco/ONVIF-Event-Viewer/blob/main/Screenshot.jpg?raw=true" alt="ONVIF Event Viewer screenshot" width="900">
 </a>
