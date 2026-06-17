@@ -2,6 +2,8 @@
 
 `ONVIF Event Viewer` is a small desktop GUI for monitoring live ONVIF events from a camera without any third-party dependencies. It uses only the Python standard library and connects directly to the camera's ONVIF SOAP endpoints.
 
+Download the pre-built Windows EXE from the [Release page](https://github.com/jsammarco/ONVIF-Event-Viewer/releases/tag/Release).
+
 <a href="https://github.com/jsammarco/ONVIF-Event-Viewer/blob/main/Screenshot.jpg" target="_blank" rel="noopener noreferrer">
   <img src="https://github.com/jsammarco/ONVIF-Event-Viewer/blob/main/Screenshot.jpg?raw=true" alt="ONVIF Event Viewer screenshot" width="900">
 </a>
