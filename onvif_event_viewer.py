@@ -16,6 +16,7 @@ import base64
 import datetime as dt
 import hashlib
 import http.client
+import json
 import os
 import queue
 import re
@@ -24,10 +25,12 @@ import threading
 import time
 import uuid
 import urllib.parse
+import webbrowser
 import xml.dom.minidom
 import xml.etree.ElementTree as ET
 import tkinter as tk
-from tkinter import ttk, messagebox
+import tkinter.font as tkfont
+from tkinter import ttk, messagebox, filedialog
 
 
 CAMERA_IP = "192.168.1.184"
@@ -50,6 +53,20 @@ DEFAULT_EXCLUDE_TOPICS = {
     "tnsaxis:AdaptiveAudioDetection/LevelData",
     "tnsaxis:SoundPressureLevel/Metrics",
 }
+
+APP_TITLE = "Vanilla Python ONVIF Live Event Viewer"
+SETTINGS_FILE_NAME = "onvif_event_viewer_settings.json"
+WEB_HELP_URL = "https://github.com/jsammarco/ONVIF-Event-Viewer"
+ABOUT_TEXT = (
+    "Made by Consulting Joe\n"
+    "Joseph Sammarco\n"
+    "ConsultingJoe@gmail.com\n"
+    "https://ConsultingJoe.com"
+)
+EVENTS_FILE_NAME = "onvif_event_viewer_events.json"
+
+XML_TOKEN_RE = re.compile(r"<!--.*?-->|<!\[CDATA\[.*?\]\]>|<\?.*?\?>|</?[^>]+?>", re.DOTALL)
+XML_ATTR_RE = re.compile(r'([^\s=/?<>]+)(\s*=\s*)(".*?"|\'.*?\'|[^\s>]+)', re.DOTALL)
 
 ET.register_namespace("s", SOAP_ENV)
 ET.register_namespace("wsa", WSA)
@@ -484,6 +501,20 @@ def format_xml_for_display(text):
         return text
 
 
+def looks_like_xml(text):
+    stripped = text.strip()
+    return bool(stripped) and stripped.startswith("<")
+
+
+def default_settings_path():
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), SETTINGS_FILE_NAME)
+
+
+def sanitize_filename(value, fallback):
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._")
+    return cleaned or fallback
+
+
 def prefixed_qname(name):
     if not name.startswith("{"):
         return name
@@ -596,13 +627,14 @@ def parse_notification_messages(xml):
 class EventViewerGui:
     def __init__(self, root):
         self.root = root
-        self.root.title("Vanilla Python ONVIF Live Event Viewer")
+        self.root.title(APP_TITLE)
         self.root.geometry("1200x720")
 
         self.event_queue = queue.Queue()
         self.all_events = []
         self.client = None
         self.worker = None
+        self.settings_path = default_settings_path()
 
         self.ip_var = tk.StringVar(value=CAMERA_IP)
         self.user_var = tk.StringVar(value=ONVIF_USER)
@@ -613,11 +645,16 @@ class EventViewerGui:
         self.autoscroll_var = tk.BooleanVar(value=True)
         self.exclude_noise_var = tk.BooleanVar(value=True)
         self.status_var = tk.StringVar(value="Disconnected")
+        self.xml_preview_visible = True
 
+        self.load_settings(self.settings_path)
         self.build_gui()
+        self.enable_auto_settings_save()
         self.root.after(200, self.process_queue)
 
     def build_gui(self):
+        self.build_menu()
+
         top = ttk.Frame(self.root, padding=8)
         top.pack(side=tk.TOP, fill=tk.X)
 
@@ -658,17 +695,17 @@ class EventViewerGui:
             command=self.refresh_table,
         ).pack(side=tk.LEFT, padx=8)
 
-        paned = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
-        paned.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        self.paned = ttk.PanedWindow(self.root, orient=tk.VERTICAL)
+        self.paned.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
-        table_frame = ttk.Frame(paned)
-        detail_frame = ttk.Frame(paned)
+        self.table_frame = ttk.Frame(self.paned)
+        self.detail_frame = ttk.Frame(self.paned)
 
-        paned.add(table_frame, weight=3)
-        paned.add(detail_frame, weight=2)
+        self.paned.add(self.table_frame, weight=3)
+        self.paned.add(self.detail_frame, weight=2)
 
         columns = ("time", "kind", "topic", "message")
-        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(self.table_frame, columns=columns, show="headings", selectmode="browse")
 
         self.tree.heading("time", text="Time")
         self.tree.heading("kind", text="Kind")
@@ -680,7 +717,7 @@ class EventViewerGui:
         self.tree.column("topic", width=330, anchor=tk.W)
         self.tree.column("message", width=560, anchor=tk.W)
 
-        yscroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        yscroll = ttk.Scrollbar(self.table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=yscroll.set)
 
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -688,15 +725,16 @@ class EventViewerGui:
 
         self.tree.bind("<<TreeviewSelect>>", self.on_select)
 
-        ttk.Label(detail_frame, text="Raw XML / Details").pack(anchor=tk.W, padx=8, pady=(8, 0))
+        ttk.Label(self.detail_frame, text="Raw XML / Details").pack(anchor=tk.W, padx=8, pady=(8, 0))
 
-        detail_container = ttk.Frame(detail_frame)
+        detail_container = ttk.Frame(self.detail_frame)
         detail_container.pack(fill=tk.BOTH, expand=True, padx=8, pady=8)
 
         self.detail = tk.Text(detail_container, wrap=tk.NONE, height=12)
         detail_y = ttk.Scrollbar(detail_container, orient=tk.VERTICAL, command=self.detail.yview)
         detail_x = ttk.Scrollbar(detail_container, orient=tk.HORIZONTAL, command=self.detail.xview)
         self.detail.configure(yscrollcommand=detail_y.set, xscrollcommand=detail_x.set)
+        self.configure_detail_tags()
 
         self.detail.grid(row=0, column=0, sticky="nsew")
         detail_y.grid(row=0, column=1, sticky="ns")
@@ -704,6 +742,28 @@ class EventViewerGui:
 
         detail_container.columnconfigure(0, weight=1)
         detail_container.rowconfigure(0, weight=1)
+
+    def build_menu(self):
+        menu_bar = tk.Menu(self.root)
+
+        file_menu = tk.Menu(menu_bar, tearoff=0)
+        file_menu.add_command(label="Import All Events...", command=self.import_all_events)
+        file_menu.add_command(label="Export All Events...", command=self.export_all_events)
+        file_menu.add_command(label="Export Selected Event XML...", command=self.export_selected_event_xml)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.on_close)
+        menu_bar.add_cascade(label="File", menu=file_menu)
+
+        self.view_menu = tk.Menu(menu_bar, tearoff=0)
+        self.view_menu.add_command(label="Hide XML Preview", command=self.toggle_xml_preview)
+        menu_bar.add_cascade(label="View", menu=self.view_menu)
+
+        help_menu = tk.Menu(menu_bar, tearoff=0)
+        help_menu.add_command(label="Web Help", command=self.open_web_help)
+        help_menu.add_command(label="About", command=self.show_about)
+        menu_bar.add_cascade(label="Help", menu=help_menu)
+
+        self.root.configure(menu=menu_bar)
 
     def connect(self):
         if self.worker and self.worker.is_alive():
@@ -747,6 +807,203 @@ class EventViewerGui:
         self.all_events.clear()
         self.refresh_table()
         self.set_detail_text("")
+
+    def get_settings_payload(self):
+        return {
+            "ip": self.ip_var.get().strip(),
+            "username": self.user_var.get().strip(),
+            "password": self.pass_var.get(),
+            "filter": self.filter_var.get(),
+            "regex": bool(self.regex_var.get()),
+            "case_sensitive": bool(self.case_var.get()),
+            "autoscroll": bool(self.autoscroll_var.get()),
+            "hide_audio_metrics": bool(self.exclude_noise_var.get()),
+        }
+
+    def enable_auto_settings_save(self):
+        for variable in (
+            self.ip_var,
+            self.user_var,
+            self.pass_var,
+            self.filter_var,
+            self.regex_var,
+            self.case_var,
+            self.autoscroll_var,
+            self.exclude_noise_var,
+        ):
+            variable.trace_add("write", self.on_settings_changed)
+
+    def on_settings_changed(self, *_args):
+        self.save_settings(self.settings_path)
+
+    def apply_settings_payload(self, payload):
+        if not isinstance(payload, dict):
+            raise ValueError("Settings file must contain a JSON object.")
+
+        self.ip_var.set(str(payload.get("ip", self.ip_var.get())))
+        self.user_var.set(str(payload.get("username", self.user_var.get())))
+        self.pass_var.set(str(payload.get("password", self.pass_var.get())))
+        self.filter_var.set(str(payload.get("filter", self.filter_var.get())))
+        self.regex_var.set(bool(payload.get("regex", self.regex_var.get())))
+        self.case_var.set(bool(payload.get("case_sensitive", self.case_var.get())))
+        self.autoscroll_var.set(bool(payload.get("autoscroll", self.autoscroll_var.get())))
+        self.exclude_noise_var.set(bool(payload.get("hide_audio_metrics", self.exclude_noise_var.get())))
+
+    def load_settings(self, path, show_errors=False):
+        try:
+            if not os.path.exists(path):
+                return False
+
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+
+            self.apply_settings_payload(payload)
+            return True
+        except Exception as exc:
+            if show_errors:
+                messagebox.showerror("Import failed", f"Could not load settings.\n\n{exc}")
+            return False
+
+    def save_settings(self, path, show_errors=False):
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(self.get_settings_payload(), handle, indent=2)
+            return True
+        except Exception as exc:
+            if show_errors:
+                messagebox.showerror("Export failed", f"Could not save settings.\n\n{exc}")
+            return False
+
+    def import_all_events(self):
+        path = filedialog.askopenfilename(
+            title="Import All Events",
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+
+            if not isinstance(payload, list):
+                raise ValueError("Event file must contain a JSON array.")
+
+            self.all_events = []
+            for item in payload:
+                if not isinstance(item, dict):
+                    raise ValueError("Each imported event must be a JSON object.")
+                self.all_events.append({
+                    "kind": str(item.get("kind", "")),
+                    "time": str(item.get("time", "")),
+                    "topic": str(item.get("topic", "")),
+                    "message": str(item.get("message", "")),
+                    "raw": str(item.get("raw", "")),
+                })
+
+            self.refresh_table()
+            self.set_detail_text("")
+            self.status_var.set(f"Imported {len(self.all_events)} events from {os.path.basename(path)}")
+            messagebox.showinfo("Events Imported", f"Imported {len(self.all_events)} events from:\n{path}")
+        except Exception as exc:
+            messagebox.showerror("Import failed", f"Could not import events.\n\n{exc}")
+
+    def export_all_events(self):
+        path = filedialog.asksaveasfilename(
+            title="Export All Events",
+            defaultextension=".json",
+            initialfile=EVENTS_FILE_NAME,
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(self.all_events, handle, indent=2)
+            self.status_var.set(f"Exported {len(self.all_events)} events to {os.path.basename(path)}")
+            messagebox.showinfo("Events Exported", f"Exported {len(self.all_events)} events to:\n{path}")
+        except Exception as exc:
+            messagebox.showerror("Export failed", f"Could not export events.\n\n{exc}")
+
+    def get_selected_event(self):
+        selected = self.tree.selection()
+        if not selected:
+            return None
+
+        return self.all_events[int(selected[0])]
+
+    def export_selected_event_xml(self):
+        ev = self.get_selected_event()
+        if ev is None:
+            messagebox.showwarning("No Selection", "Select an event first.")
+            return
+
+        raw = ev.get("raw", "")
+        if not looks_like_xml(raw):
+            messagebox.showwarning("No XML", "The selected event does not contain XML to export.")
+            return
+
+        event_time = sanitize_filename(ev.get("time", ""), "event")
+        topic = sanitize_filename(ev.get("topic", ""), "xml")
+        path = filedialog.asksaveasfilename(
+            title="Export Selected Event XML",
+            defaultextension=".xml",
+            initialfile=f"{event_time}_{topic}.xml",
+            filetypes=[("XML Files", "*.xml"), ("All Files", "*.*")],
+        )
+        if not path:
+            return
+
+        try:
+            with open(path, "w", encoding="utf-8") as handle:
+                handle.write(format_xml_for_display(raw))
+            self.status_var.set(f"Exported event XML to {os.path.basename(path)}")
+            messagebox.showinfo("Event XML Exported", f"Exported selected event XML to:\n{path}")
+        except Exception as exc:
+            messagebox.showerror("Export failed", f"Could not export event XML.\n\n{exc}")
+
+    def open_web_help(self):
+        webbrowser.open(WEB_HELP_URL)
+
+    def show_about(self):
+        messagebox.showinfo("About", ABOUT_TEXT)
+
+    def toggle_xml_preview(self):
+        if self.xml_preview_visible:
+            self.paned.forget(self.detail_frame)
+            self.xml_preview_visible = False
+        else:
+            self.paned.add(self.detail_frame, weight=2)
+            self.xml_preview_visible = True
+
+        self.update_view_menu_label()
+
+    def update_view_menu_label(self):
+        label = "Hide XML Preview" if self.xml_preview_visible else "Show XML Preview"
+        self.view_menu.entryconfigure(0, label=label)
+
+    def on_close(self):
+        self.save_settings(self.settings_path)
+        if self.client:
+            self.client.stop_flag.set()
+        self.root.destroy()
+
+    def configure_detail_tags(self):
+        base_font = tkfont.nametofont("TkFixedFont")
+        bold_font = base_font.copy()
+        bold_font.configure(weight="bold")
+
+        self.detail.configure(font=base_font)
+        self.detail.tag_configure("detail_label", font=bold_font)
+        self.detail.tag_configure("xml_bracket", foreground="#6B7280")
+        self.detail.tag_configure("xml_tag", foreground="#0F4C81")
+        self.detail.tag_configure("xml_attr", foreground="#9A3412")
+        self.detail.tag_configure("xml_string", foreground="#166534")
+        self.detail.tag_configure("xml_comment", foreground="#6B7280")
+        self.detail.tag_configure("xml_text", foreground="#111827")
+        self.detail.tag_configure("xml_decl", foreground="#0F766E")
+        self.detail.configure(state=tk.DISABLED)
 
     def log(self, text):
         self.event_queue.put({
@@ -864,26 +1121,104 @@ class EventViewerGui:
             f"Kind: {ev.get('kind', '')}\n"
             f"Topic: {ev.get('topic', '')}\n"
             f"Message: {ev.get('message', '')}\n\n"
-            f"Raw XML / Details:\n{formatted_raw}"
         )
-
-        self.set_detail_text(text)
+        self.set_detail_content(text, formatted_raw)
 
     def set_detail_text(self, text):
+        self.detail.configure(state=tk.NORMAL)
         self.detail.delete("1.0", tk.END)
         self.detail.insert("1.0", text)
+        self.detail.configure(state=tk.DISABLED)
+
+    def set_detail_content(self, summary_text, raw_text):
+        self.detail.configure(state=tk.NORMAL)
+        self.detail.delete("1.0", tk.END)
+        self.detail.insert(tk.END, summary_text)
+        self.detail.insert(tk.END, "Raw XML / Details:\n", ("detail_label",))
+
+        if looks_like_xml(raw_text):
+            self.insert_xml_with_syntax_highlighting(raw_text)
+        else:
+            self.detail.insert(tk.END, raw_text)
+
+        self.detail.configure(state=tk.DISABLED)
+
+    def insert_xml_with_syntax_highlighting(self, xml_text):
+        position = 0
+
+        for match in XML_TOKEN_RE.finditer(xml_text):
+            if match.start() > position:
+                self.detail.insert(tk.END, xml_text[position:match.start()], ("xml_text",))
+
+            self.insert_xml_token(match.group(0))
+            position = match.end()
+
+        if position < len(xml_text):
+            self.detail.insert(tk.END, xml_text[position:], ("xml_text",))
+
+    def insert_xml_token(self, token):
+        if token.startswith("<!--") or token.startswith("<![CDATA["):
+            self.detail.insert(tk.END, token, ("xml_comment",))
+            return
+
+        if token.startswith("<?"):
+            self.detail.insert(tk.END, "<?", ("xml_bracket",))
+            self.insert_xml_tag_body(token[2:-2], default_tag="xml_decl")
+            self.detail.insert(tk.END, "?>", ("xml_bracket",))
+            return
+
+        if token.startswith("</"):
+            self.detail.insert(tk.END, "</", ("xml_bracket",))
+            self.detail.insert(tk.END, token[2:-1].strip(), ("xml_tag",))
+            self.detail.insert(tk.END, ">", ("xml_bracket",))
+            return
+
+        self.detail.insert(tk.END, "<", ("xml_bracket",))
+        body = token[1:-1]
+        closing_suffix = ""
+
+        if body.endswith("/"):
+            body = body[:-1]
+            closing_suffix = "/>"
+        else:
+            closing_suffix = ">"
+
+        self.insert_xml_tag_body(body, default_tag="xml_tag")
+        self.detail.insert(tk.END, closing_suffix, ("xml_bracket",))
+
+    def insert_xml_tag_body(self, body, default_tag):
+        stripped = body.strip()
+        if not stripped:
+            return
+
+        name_match = re.match(r"\S+", stripped)
+        if not name_match:
+            self.detail.insert(tk.END, stripped, (default_tag,))
+            return
+
+        tag_name = name_match.group(0)
+        self.detail.insert(tk.END, tag_name, (default_tag,))
+
+        attrs = stripped[name_match.end():]
+        cursor = 0
+
+        for match in XML_ATTR_RE.finditer(attrs):
+            if match.start() > cursor:
+                self.detail.insert(tk.END, attrs[cursor:match.start()], ("xml_text",))
+
+            self.detail.insert(tk.END, match.group(1), ("xml_attr",))
+            self.detail.insert(tk.END, match.group(2), ("xml_text",))
+            self.detail.insert(tk.END, match.group(3), ("xml_string",))
+            cursor = match.end()
+
+        if cursor < len(attrs):
+            self.detail.insert(tk.END, attrs[cursor:], ("xml_text",))
 
 
 def main():
     root = tk.Tk()
     app = EventViewerGui(root)
-
-    def on_close():
-        if app.client:
-            app.client.stop_flag.set()
-        root.destroy()
-
-    root.protocol("WM_DELETE_WINDOW", on_close)
+    root.protocol("WM_DELETE_WINDOW", app.on_close)
     root.mainloop()
 
 

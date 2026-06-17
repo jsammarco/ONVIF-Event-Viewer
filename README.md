@@ -12,7 +12,9 @@ The app:
 - Creates a pull-point subscription
 - Polls for live event notifications
 - Displays incoming events in a filterable table
-- Shows raw event XML in a readable detail panel
+- Shows raw event XML in a readable detail panel with XML syntax coloring
+- Remembers the last-used connection settings between launches
+- Includes menu actions for importing/exporting all events and exporting a selected event's XML
 
 ## Requirements
 
@@ -25,17 +27,18 @@ No external Python packages are required.
 ## Project Files
 
 - [onvif_event_viewer.py](/C:/Users/jasammarco.ENG/Projects/ONVIF-Event-Viewer/onvif_event_viewer.py) - main application script
+- [onvif_event_viewer_settings.json](/C:/Users/jasammarco.ENG/Projects/ONVIF-Event-Viewer/onvif_event_viewer_settings.json) - auto-saved local settings file created after first run/connect
 - [LICENSE](/C:/Users/jasammarco.ENG/Projects/ONVIF-Event-Viewer/LICENSE) - GPL-3.0 license text
 
-## Default Connection Settings
+## Saved Connection Settings
 
-The script currently starts with these defaults near the top of the file:
+The app starts with built-in defaults:
 
 - IP: `192.168.1.184`
 - Username: `onvif`
 - Password: `onvif`
 
-Update those constants in [onvif_event_viewer.py](/C:/Users/jasammarco.ENG/Projects/ONVIF-Event-Viewer/onvif_event_viewer.py) if you want different startup values.
+After you change any of those settings, the viewer saves them automatically to `onvif_event_viewer_settings.json` next to the script and reloads them automatically on the next launch.
 
 ## Running The App
 
@@ -53,6 +56,25 @@ python .\onvif_event_viewer.py
 4. Watch events appear in the top table.
 5. Select any row to inspect the event details and formatted raw XML in the bottom panel.
 6. Click `Disconnect` to stop polling.
+
+## Menu Bar
+
+### File
+
+- `Import All Events...` loads a full event list from a JSON export
+- `Export All Events...` writes the current event list to a JSON file
+- `Export Selected Event XML...` saves the selected event's XML to an `.xml` file
+- `Exit` closes the application
+
+### View
+
+- `Hide XML Preview` collapses the bottom raw XML/details pane
+- `Show XML Preview` restores the bottom raw XML/details pane
+
+### Help
+
+- `Web Help` opens the project page at [jsammarco/ONVIF-Event-Viewer](https://github.com/jsammarco/ONVIF-Event-Viewer)
+- `About` shows the author/contact card for Consulting Joe
 
 ## UI Features
 
@@ -88,6 +110,7 @@ The bottom panel displays:
 
 - selected event metadata
 - formatted raw XML when the payload is valid XML
+- XML syntax coloring for tags, attributes, values, comments, and declarations
 - raw text fallback for non-XML messages such as status or error entries
 
 ## ONVIF Flow Implemented
@@ -122,6 +145,17 @@ If a camera does not implement `Unsubscribe`, the app logs that behavior and let
 - Make sure the ONVIF device service is reachable.
 - Confirm the camera allows the provided ONVIF credentials.
 - Review the detail panel for raw response text and SOAP fault content.
+
+### Settings Questions
+
+- The app automatically saves connection settings and common UI options as you change them.
+- Delete `onvif_event_viewer_settings.json` if you want to reset the remembered connection values.
+
+### Event Export And Import
+
+- Use `File` -> `Export All Events...` to save the current event list to JSON.
+- Use `File` -> `Import All Events...` to load a previously exported event list.
+- Use `File` -> `Export Selected Event XML...` to save just the selected event's XML payload.
 
 ### High Event Volume
 
