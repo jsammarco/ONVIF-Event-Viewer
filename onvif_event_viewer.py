@@ -437,6 +437,7 @@ class OnvifEventClient:
                 declared_topics = extract_declared_topics(props)
 
                 event_queue.put({
+                    "device_ip": self.ip,
                     "kind": "system",
                     "text": f"Fetched event properties ({len(declared_topics)} declared topics).",
                     "raw": props,
@@ -457,12 +458,14 @@ class OnvifEventClient:
                         summary += f" Found {len(analytics_topics)} application/analytics-related topics."
 
                     event_queue.put({
+                        "device_ip": self.ip,
                         "kind": "system",
                         "text": summary,
                         "raw": "\n".join(declared_topics),
                     })
             except Exception as exc:
                 event_queue.put({
+                    "device_ip": self.ip,
                     "kind": "warning",
                     "text": f"GetEventProperties failed, continuing anyway: {exc}",
                     "raw": "",
@@ -473,12 +476,14 @@ class OnvifEventClient:
             try:
                 self.set_synchronization_point()
                 event_queue.put({
+                    "device_ip": self.ip,
                     "kind": "system",
                     "text": "Requested synchronization point for stateful events.",
                     "raw": "",
                 })
             except Exception as exc:
                 event_queue.put({
+                    "device_ip": self.ip,
                     "kind": "warning",
                     "text": f"SetSynchronizationPoint failed, continuing anyway: {exc}",
                     "raw": "",
@@ -491,27 +496,39 @@ class OnvifEventClient:
 
                     if not events:
                         event_queue.put({
+                            "device_ip": self.ip,
                             "kind": "heartbeat",
                             "text": "No event messages in this pull.",
                             "raw": xml,
                         })
 
                     for ev in events:
+                        ev.setdefault("device_ip", self.ip)
                         event_queue.put(ev)
 
                 except socket.timeout:
                     event_queue.put({
+                        "device_ip": self.ip,
                         "kind": "warning",
                         "text": "Socket timeout while pulling messages.",
                         "raw": "",
                     })
                 except Exception as exc:
                     event_queue.put({
+                        "device_ip": self.ip,
                         "kind": "error",
                         "text": f"PullMessages error: {exc}",
                         "raw": "",
                     })
                     time.sleep(2)
+
+        except Exception as exc:
+            event_queue.put({
+                "device_ip": self.ip,
+                "kind": "error",
+                "text": f"Connection error: {exc}",
+                "raw": "",
+            })
 
         finally:
             self.unsubscribe()
@@ -555,6 +572,20 @@ def default_settings_path():
 def sanitize_filename(value, fallback):
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._")
     return cleaned or fallback
+
+
+def parse_camera_ips(value):
+    ips = []
+    seen = set()
+
+    for item in re.split(r"[\s,;]+", value.strip()):
+        item = item.strip()
+        if not item or item in seen:
+            continue
+        ips.append(item)
+        seen.add(item)
+
+    return ips
 
 
 def prefixed_qname(name):
@@ -674,8 +705,8 @@ class EventViewerGui:
 
         self.event_queue = queue.Queue()
         self.all_events = []
-        self.client = None
-        self.worker = None
+        self.clients = []
+        self.workers = []
         self.settings_path = default_settings_path()
         self.current_palette = LIGHT_THEME
 
@@ -705,8 +736,8 @@ class EventViewerGui:
         top = ttk.Frame(self.root, padding=8)
         top.pack(side=tk.TOP, fill=tk.X)
 
-        ttk.Label(top, text="IP").pack(side=tk.LEFT)
-        ttk.Entry(top, textvariable=self.ip_var, width=18).pack(side=tk.LEFT, padx=(4, 10))
+        ttk.Label(top, text="IP(s)").pack(side=tk.LEFT)
+        ttk.Entry(top, textvariable=self.ip_var, width=32).pack(side=tk.LEFT, padx=(4, 10))
 
         ttk.Label(top, text="User").pack(side=tk.LEFT)
         ttk.Entry(top, textvariable=self.user_var, width=14).pack(side=tk.LEFT, padx=(4, 10))
@@ -751,18 +782,20 @@ class EventViewerGui:
         self.paned.add(self.table_frame, weight=3)
         self.paned.add(self.detail_frame, weight=2)
 
-        columns = ("time", "kind", "topic", "message")
+        columns = ("time", "device_ip", "kind", "topic", "message")
         self.tree = ttk.Treeview(self.table_frame, columns=columns, show="headings", selectmode="browse")
 
         self.tree.heading("time", text="Time")
+        self.tree.heading("device_ip", text="Camera IP")
         self.tree.heading("kind", text="Kind")
         self.tree.heading("topic", text="Topic")
         self.tree.heading("message", text="Message")
 
-        self.tree.column("time", width=190, anchor=tk.W)
-        self.tree.column("kind", width=90, anchor=tk.W)
-        self.tree.column("topic", width=330, anchor=tk.W)
-        self.tree.column("message", width=560, anchor=tk.W)
+        self.tree.column("time", width=180, anchor=tk.W)
+        self.tree.column("device_ip", width=130, anchor=tk.W)
+        self.tree.column("kind", width=85, anchor=tk.W)
+        self.tree.column("topic", width=315, anchor=tk.W)
+        self.tree.column("message", width=460, anchor=tk.W)
 
         yscroll = ttk.Scrollbar(self.table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=yscroll.set)
@@ -816,39 +849,55 @@ class EventViewerGui:
         self.root.configure(menu=self.menu_bar)
 
     def connect(self):
-        if self.worker and self.worker.is_alive():
+        if self.has_live_workers():
             return
 
-        ip = self.ip_var.get().strip()
+        camera_ips = parse_camera_ips(self.ip_var.get())
         username = self.user_var.get().strip()
         password = self.pass_var.get()
 
-        if not ip or not username:
-            messagebox.showerror("Missing details", "IP and username are required.")
+        if not camera_ips or not username:
+            messagebox.showerror("Missing details", "At least one IP and a username are required.")
             return
 
-        self.client = OnvifEventClient(ip, username, password, self.log)
-        self.client.stop_flag.clear()
+        self.clients = []
+        self.workers = []
 
-        self.worker = threading.Thread(
-            target=self.client.run,
-            args=(self.event_queue,),
-            daemon=True,
-        )
-        self.worker.start()
+        for ip in camera_ips:
+            client = OnvifEventClient(ip, username, password, lambda text, device_ip=ip: self.log(text, device_ip))
+            client.stop_flag.clear()
 
-        self.status_var.set("Connected / listening")
+            worker = threading.Thread(
+                target=client.run,
+                args=(self.event_queue,),
+                daemon=True,
+            )
+            worker.start()
+
+            self.clients.append(client)
+            self.workers.append(worker)
+
+        camera_count = len(camera_ips)
+        noun = "camera" if camera_count == 1 else "cameras"
+        self.status_var.set(f"Connected / listening ({camera_count} {noun})")
         self.connect_btn.configure(state=tk.DISABLED)
         self.disconnect_btn.configure(state=tk.NORMAL)
 
     def disconnect(self):
-        if self.client:
-            self.client.stop_flag.set()
+        for client in self.clients:
+            client.stop_flag.set()
 
         self.status_var.set("Disconnecting...")
-        self.root.after(1000, self.mark_disconnected)
+        self.root.after(500, self.mark_disconnected)
+
+    def has_live_workers(self):
+        return any(worker.is_alive() for worker in self.workers)
 
     def mark_disconnected(self):
+        if self.has_live_workers():
+            self.root.after(500, self.mark_disconnected)
+            return
+
         self.status_var.set("Disconnected")
         self.connect_btn.configure(state=tk.NORMAL)
         self.disconnect_btn.configure(state=tk.DISABLED)
@@ -947,6 +996,7 @@ class EventViewerGui:
                 if not isinstance(item, dict):
                     raise ValueError("Each imported event must be a JSON object.")
                 self.all_events.append({
+                    "device_ip": str(item.get("device_ip", "")),
                     "kind": str(item.get("kind", "")),
                     "time": str(item.get("time", "")),
                     "topic": str(item.get("topic", "")),
@@ -1108,8 +1158,8 @@ class EventViewerGui:
 
     def on_close(self):
         self.save_settings(self.settings_path)
-        if self.client:
-            self.client.stop_flag.set()
+        for client in self.clients:
+            client.stop_flag.set()
         self.root.destroy()
 
     def configure_detail_tags(self):
@@ -1129,8 +1179,9 @@ class EventViewerGui:
         self.detail.tag_configure("xml_decl", foreground=palette["xml_decl"])
         self.detail.configure(state=tk.DISABLED)
 
-    def log(self, text):
+    def log(self, text, device_ip=""):
         self.event_queue.put({
+            "device_ip": device_ip,
             "kind": "system",
             "time": utc_timestamp(),
             "topic": "",
@@ -1149,6 +1200,8 @@ class EventViewerGui:
 
             if "time" not in item:
                 item["time"] = utc_timestamp()
+            if "device_ip" not in item:
+                item["device_ip"] = ""
             if "topic" not in item:
                 item["topic"] = ""
             if "message" not in item:
@@ -1161,6 +1214,9 @@ class EventViewerGui:
 
         if changed:
             self.refresh_table()
+
+        if self.workers and not self.has_live_workers() and str(self.disconnect_btn.cget("state")) != tk.DISABLED:
+            self.mark_disconnected()
 
         self.root.after(200, self.process_queue)
 
@@ -1178,6 +1234,7 @@ class EventViewerGui:
 
         haystack = "\n".join([
             ev.get("time", ""),
+            ev.get("device_ip", ""),
             ev.get("kind", ""),
             ev.get("topic", ""),
             ev.get("message", ""),
@@ -1218,6 +1275,7 @@ class EventViewerGui:
                 iid=str(idx),
                 values=(
                     ev.get("time", ""),
+                    ev.get("device_ip", ""),
                     ev.get("kind", ""),
                     ev.get("topic", ""),
                     msg,
@@ -1242,6 +1300,7 @@ class EventViewerGui:
 
         text = (
             f"Time: {ev.get('time', '')}\n"
+            f"Camera IP: {ev.get('device_ip', '')}\n"
             f"Kind: {ev.get('kind', '')}\n"
             f"Topic: {ev.get('topic', '')}\n"
             f"Message: {ev.get('message', '')}\n\n"

@@ -1,6 +1,6 @@
 # ONVIF Event Viewer
 
-`ONVIF Event Viewer` is a small desktop GUI for monitoring live ONVIF events from a camera without any third-party dependencies. It uses only the Python standard library and connects directly to the camera's ONVIF SOAP endpoints.
+`ONVIF Event Viewer` is a small desktop GUI for monitoring live ONVIF events from one or more cameras without any third-party dependencies. It uses only the Python standard library and connects directly to the cameras' ONVIF SOAP endpoints.
 
 Download the pre-built Windows EXE from the [Release page](https://github.com/jsammarco/ONVIF-Event-Viewer/releases/tag/Release).
 
@@ -14,10 +14,11 @@ Download the pre-built Windows EXE from the [Release page](https://github.com/js
 
 The app:
 
-- Discovers the camera's ONVIF events service
+- Discovers each camera's ONVIF events service
 - Creates a pull-point subscription
 - Polls for live event notifications
 - Displays incoming events in a filterable table
+- Shows the camera IP address for each event row
 - Shows raw event XML in a readable detail panel with XML syntax coloring
 - Remembers the last-used connection settings between launches
 - Supports light and dark viewing modes
@@ -26,7 +27,7 @@ The app:
 ## Requirements
 
 - Python 3.9 or newer recommended
-- Network access to the target ONVIF camera
+- Network access to the target ONVIF camera or cameras
 - Valid ONVIF username and password
 
 No external Python packages are required.
@@ -41,11 +42,11 @@ No external Python packages are required.
 
 The app starts with built-in defaults:
 
-- IP: `192.168.1.184`
+- IP(s): `192.168.1.184`
 - Username: `onvif`
 - Password: `onvif`
 
-After you change any of those settings, the viewer saves them automatically to `onvif_event_viewer_settings.json` next to the script and reloads them automatically on the next launch.
+After you change any of those settings, the viewer saves them automatically to `onvif_event_viewer_settings.json` next to the script and reloads them automatically on the next launch. To connect to multiple cameras, enter IP addresses separated by commas, semicolons, spaces, or new lines.
 
 ## Running The App
 
@@ -58,7 +59,7 @@ python .\onvif_event_viewer.py
 ## How To Use
 
 1. Launch the application.
-2. Enter the camera IP, ONVIF username, and password.
+2. Enter one or more camera IP addresses, the ONVIF username, and password.
 3. Click `Connect`.
 4. Watch events appear in the top table.
 5. Select any row to inspect the event details and formatted raw XML in the bottom panel.
@@ -92,6 +93,7 @@ python .\onvif_event_viewer.py
 The top panel shows:
 
 - `Time`
+- `Camera IP`
 - `Kind`
 - `Topic`
 - `Message`
@@ -101,6 +103,7 @@ The top panel shows:
 Use the filter box to search across:
 
 - event time
+- camera IP
 - event kind
 - topic
 - message text
@@ -124,7 +127,7 @@ The bottom panel displays:
 
 ## ONVIF Flow Implemented
 
-The viewer uses this sequence:
+For each camera, the viewer uses this sequence:
 
 1. `GetCapabilities` to discover the Events service endpoint
 2. `GetEventProperties` to retrieve camera event metadata
@@ -145,14 +148,14 @@ If a camera does not implement `Unsubscribe`, the app logs that behavior and let
 
 ### No Events Appear
 
-- Confirm the camera supports ONVIF Events and PullPoint subscriptions.
-- Verify the IP address, username, and password.
-- Check firewall and network routing between the workstation and camera.
+- Confirm each camera supports ONVIF Events and PullPoint subscriptions.
+- Verify the IP address list, username, and password.
+- Check firewall and network routing between the workstation and each camera.
 
 ### Connection Or SOAP Errors
 
 - Make sure the ONVIF device service is reachable.
-- Confirm the camera allows the provided ONVIF credentials.
+- Confirm each camera allows the provided ONVIF credentials.
 - Review the detail panel for raw response text and SOAP fault content.
 
 ### Settings Questions
